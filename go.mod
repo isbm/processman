@@ -1,4 +1,4 @@
-module github.com/buraksezer/processman
+module github.com/isbm/processman
 
 go 1.14
 
