@@ -36,7 +36,7 @@ Process:
 With a properly configured Golang environment:
 
 ```
-go get -u github.com/buraksezer/processman
+go get -u github.com/isbm/processman
 ```
 
 ### Initialization
@@ -44,7 +44,7 @@ go get -u github.com/buraksezer/processman
 You just need to call `New` method to create a new Processman instance:
 
 ```go
-import "github.com/buraksezer/processman"
+import "github.com/isbm/processman"
 ...
 pm := processman.New(nil)
 ...
