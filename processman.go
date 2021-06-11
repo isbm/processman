@@ -34,6 +34,8 @@ import (
 )
 
 const maximumInterval = 5000 // 5s in milliseconds
+const RESTART_FOREVER = 0
+const RESTART_DISABLED = -1
 
 // ErrProcessmanGone denotes Shutdown function is called and this instance cannot be used anymore
 var ErrProcessmanGone = errors.New("processman instance has been closed")
@@ -43,10 +45,11 @@ type Processman struct {
 	mtx       sync.RWMutex
 	processes map[int]*Process
 
-	logger *log.Logger
-	wg     sync.WaitGroup
-	ctx    context.Context
-	cancel context.CancelFunc
+	logger  *log.Logger
+	wg      sync.WaitGroup
+	ctx     context.Context
+	cancel  context.CancelFunc
+	restart int8
 }
 
 // New returns a new Processman instance
@@ -61,6 +64,7 @@ func New(logger *log.Logger) *Processman {
 		processes: make(map[int]*Process),
 		ctx:       ctx,
 		cancel:    cancel,
+		restart:   0,
 	}
 
 	rand.Seed(time.Now().UnixNano())
@@ -84,13 +88,18 @@ func (pm *Processman) waitForSigterm() {
 	}
 }
 
-func (pm *Processman) restartProcess(name string, args, env []string) {
+func (pm *Processman) restartProcess(name string, args, env []string, lasterr error, times int8, concurrent bool) {
 	defer pm.wg.Done()
 
+	if pm.restart == 0 || pm.restart == times {
+		return
+	}
+
 	interval := time.Duration(rand.Intn(maximumInterval)) * time.Millisecond
-	pm.logger.Printf("[WARN] Trying restart %s %s, interval: %v",
+	pm.logger.Printf("[WARN] Trying restart %s %s, due to %s interval: %v",
 		name,
 		strings.Join(args, " "),
+		lasterr.Error(),
 		interval,
 	)
 
@@ -98,15 +107,21 @@ func (pm *Processman) restartProcess(name string, args, env []string) {
 	case <-pm.ctx.Done():
 	// processman is gone
 	case <-time.After(interval):
-		if _, err := pm.Command(name, args, env); err != nil {
+		if _, err := pm.command(name, args, env, concurrent); err != nil {
 			pm.logger.Printf("[ERROR] Failed to restart command: %s: %v", name, err)
 			pm.wg.Add(1)
-			go pm.restartProcess(name, args, env)
+			go pm.restartProcess(name, args, env, err, times+1, concurrent)
 		}
 	}
 }
 
-func (pm *Processman) callWait(p *Process) {
+// SetRestartAfter times. If times is 0, it restarts forever.
+// If times is negative, then restarts are disabled completely.
+func (pm *Processman) SetRestartAfter(times int8) *Processman {
+	return pm
+}
+
+func (pm *Processman) callWait(p *Process, concurrent bool) {
 	defer pm.wg.Done()
 	defer close(p.errChan)
 
@@ -114,9 +129,15 @@ func (pm *Processman) callWait(p *Process) {
 	if err != nil {
 		if atomic.LoadInt32(&p.stopped) != int32(1) {
 			// Something went wrong for the child process, try to restart it.
-			pm.wg.Add(1)
-			go pm.restartProcess(p.name, p.args, p.env)
-
+			pm.logger.Printf("[ERROR] Command '%s %s' failed: %s", p.name, p.args, err.Error())
+			if pm.restart > -1 {
+				pm.wg.Add(1)
+				if concurrent {
+					go pm.restartProcess(p.name, p.args, p.env, err, 0, concurrent)
+				} else {
+					pm.restartProcess(p.name, p.args, p.env, err, 0, concurrent)
+				}
+			}
 		}
 	}
 
@@ -128,8 +149,18 @@ func (pm *Processman) callWait(p *Process) {
 	pm.mtx.Unlock()
 }
 
+// StartSerial process
+func (pm *Processman) StartSerial(name string, args, env []string) (*Process, error) {
+	return pm.command(name, args, env, false)
+}
+
+// StartConcurrent process
+func (pm *Processman) StartConcurrent(name string, args, env []string) (*Process, error) {
+	return pm.command(name, args, env, true)
+}
+
 // Command starts a new child process and creates a goroutine to wait for it.
-func (pm *Processman) Command(name string, args, env []string) (*Process, error) {
+func (pm *Processman) command(name string, args, env []string, concurrent bool) (*Process, error) {
 	select {
 	case <-pm.ctx.Done():
 		return nil, ErrProcessmanGone
@@ -171,7 +202,12 @@ func (pm *Processman) Command(name string, args, env []string) (*Process, error)
 	pm.mtx.Unlock()
 
 	pm.wg.Add(1)
-	go pm.callWait(p)
+
+	if concurrent {
+		go pm.callWait(p, true)
+	} else {
+		pm.callWait(p, false)
+	}
 
 	return p, nil
 }
