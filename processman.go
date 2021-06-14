@@ -167,6 +167,7 @@ func (pm *Processman) command(name string, args, env []string, concurrent bool) 
 	default:
 	}
 	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setctty: true, Setsid: true} // always cgroups
 	cmd.Env = append(os.Environ(), env...)
 
 	ctx, cancel := context.WithCancel(context.Background())
