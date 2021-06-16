@@ -91,7 +91,8 @@ func (pm *Processman) waitForSigterm() {
 func (pm *Processman) restartProcess(name string, args, env []string, lasterr error, times int8, concurrent bool) {
 	defer pm.wg.Done()
 
-	if pm.restart == 0 || pm.restart == times {
+	if pm.restart == RESTART_DISABLED || (pm.restart == times && pm.restart != 0) {
+		log.Printf("[WARN] Restart disabled or ended")
 		return
 	}
 
