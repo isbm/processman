@@ -81,7 +81,7 @@ func (pm *Processman) waitForSigterm() {
 	select {
 	case <-sigtermCh:
 		if err := pm.StopAll(); err != nil {
-			pm.logger.Printf("[ERROR] StopAll returned an error: %v", err)
+			log.Printf("[ERROR] StopAll returned an error: %v", err)
 		}
 	case <-pm.ctx.Done():
 		// don't wait indefinitely.
@@ -96,7 +96,7 @@ func (pm *Processman) restartProcess(name string, args, env []string, lasterr er
 	}
 
 	interval := time.Duration(rand.Intn(maximumInterval)) * time.Millisecond
-	pm.logger.Printf("[WARN] Trying restart %s %s, due to %s interval: %v",
+	log.Printf("[WARN] Trying restart %s %s, due to %s interval: %v",
 		name,
 		strings.Join(args, " "),
 		lasterr.Error(),
@@ -108,7 +108,7 @@ func (pm *Processman) restartProcess(name string, args, env []string, lasterr er
 	// processman is gone
 	case <-time.After(interval):
 		if _, err := pm.command(name, args, env, concurrent); err != nil {
-			pm.logger.Printf("[ERROR] Failed to restart command: %s: %v", name, err)
+			log.Printf("[ERROR] Failed to restart command: %s: %v", name, err)
 			pm.wg.Add(1)
 			go pm.restartProcess(name, args, env, err, times+1, concurrent)
 		}
@@ -129,14 +129,18 @@ func (pm *Processman) callWait(p *Process, concurrent bool) {
 	if err != nil {
 		if atomic.LoadInt32(&p.stopped) != int32(1) {
 			// Something went wrong for the child process, try to restart it.
-			pm.logger.Printf("[ERROR] Command '%s %s' failed: %s", p.name, p.args, err.Error())
+			log.Printf("[ERROR] Command '%s %s' failed: %s", p.name, p.args, err.Error())
 			if pm.restart > -1 {
 				pm.wg.Add(1)
 				if concurrent {
+					log.Printf("[INFO] Restarting concurrent command '%s %s':", p.name, p.args)
 					go pm.restartProcess(p.name, p.args, p.env, err, 0, concurrent)
 				} else {
+					log.Printf("[INFO] Restarting serial command '%s %s':", p.name, p.args)
 					pm.restartProcess(p.name, p.args, p.env, err, 0, concurrent)
 				}
+			} else {
+				log.Printf("[INFO] The command '%s %s' not supposed to be restarted", p.name, p.args)
 			}
 		}
 	}
